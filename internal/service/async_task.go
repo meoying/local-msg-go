@@ -63,7 +63,10 @@ func (task *AsyncTask) loop(ctx context.Context) int {
 	for _, msg := range data {
 		shadow := msg
 		eg.Go(func() error {
-			task.svc.sendMsg(loopCtx, task.db, &shadow, task.dst.Table)
+			err1 := task.svc.sendMsg(loopCtx, task.db, &shadow, task.dst.Table)
+			if err1 != nil {
+				slog.Error("发送消息失败", slog.Any("err", err1))
+			}
 			return nil
 		})
 	}
@@ -71,7 +74,8 @@ func (task *AsyncTask) loop(ctx context.Context) int {
 	return len(data)
 }
 
-func (task *AsyncTask) findSuspendMsg(ctx context.Context, offset, limit int) ([]dao.LocalMsg, error) {
+func (task *AsyncTask) findSuspendMsg(ctx context.Context,
+	offset, limit int) ([]dao.LocalMsg, error) {
 	now := time.Now().UnixMilli()
 	utime := now - task.waitDuration.Milliseconds()
 	var res []dao.LocalMsg

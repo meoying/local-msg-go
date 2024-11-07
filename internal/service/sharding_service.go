@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/IBM/sarama"
 	"github.com/meoying/local-msg-go/internal/dao"
 	"github.com/meoying/local-msg-go/internal/msg"
@@ -61,10 +62,9 @@ func (svc *ShardingService) StartAsyncTask(ctx context.Context) {
 }
 
 // SendMsg 发送消息
-func (svc *ShardingService) SendMsg(ctx context.Context, shardingInfo any, msg msg.Msg) {
-	dst := svc.Sharding.ShardingFunc(shardingInfo)
+func (svc *ShardingService) SendMsg(ctx context.Context, db, table string, msg msg.Msg) error {
 	dmsg := svc.newDmsg(msg)
-	svc.sendMsg(ctx, svc.DBs[dst.DB], dmsg, dst.Table)
+	return svc.sendMsg(ctx, svc.DBs[db], dmsg, table)
 }
 
 // SaveMsg 手动保存接口, tx 必须是你的本地事务
@@ -88,7 +88,10 @@ func (svc *ShardingService) execTx(ctx context.Context,
 		return tx.Table(table).Create(dmsg).Error
 	})
 	if err == nil {
-		svc.sendMsg(ctx, db, dmsg, table)
+		err1 := svc.sendMsg(ctx, db, dmsg, table)
+		if err1 != nil {
+			slog.Error("发送消息出现问题", slog.Any("error", err))
+		}
 	}
 	return err
 }
@@ -106,12 +109,11 @@ func (svc *ShardingService) ExecTx(ctx context.Context,
 }
 
 func (svc *ShardingService) sendMsg(ctx context.Context,
-	db *gorm.DB, dmsg *dao.LocalMsg, table string) {
+	db *gorm.DB, dmsg *dao.LocalMsg, table string) error {
 	var msg msg.Msg
 	err := json.Unmarshal(dmsg.Data, &msg)
 	if err != nil {
-		svc.Logger.Error("提取消息内容失败", err)
-		return
+		return fmt.Errorf("提取消息内容失败 %w", err)
 	}
 	// 发送消息
 	_, _, err = svc.Producer.SendMessage(newSaramaProducerMsg(msg))
@@ -138,15 +140,10 @@ func (svc *ShardingService) sendMsg(ctx context.Context,
 		Where("id=?", dmsg.Id).
 		Updates(fields).Error
 	if err1 != nil {
-		svc.Logger.Error("发送消息但是更新消息失败",
-			// 是否发送成功
-			slog.Bool("success", err1 == nil),
-			slog.String("topic", msg.Topic),
-			slog.String("key", msg.Key),
-			slog.Int("send_times", times),
-			slog.Any("err", err1),
-		)
+		return fmt.Errorf("发送消息但是更新消息失败 %w, 发送结果 %w, topic %s, key %s",
+			err1, err, msg.Topic, msg.Key)
 	}
+	return err
 }
 
 func (svc *ShardingService) newDmsg(msg msg.Msg) *dao.LocalMsg {

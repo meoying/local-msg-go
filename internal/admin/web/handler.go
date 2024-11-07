@@ -18,6 +18,7 @@ func (handler *Handler) RegisterRoutes(server *gin.Engine) {
 	server.POST("/", ginx.B(handler.List))
 }
 
+// List 请求，在分库分表的情况下，默认是从名字为空字符串的 DB 中取数据
 func (handler *Handler) List(ctx *ginx.Context, req ListReq) (ginx.Result, error) {
 	// 查找数据
 }

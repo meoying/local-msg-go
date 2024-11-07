@@ -13,6 +13,56 @@ type MsgDAO struct {
 	duration time.Duration
 }
 
+func (dao *MsgDAO) Get(ctx context.Context, table string, id int64) (LocalMsg, error) {
+	var res LocalMsg
+	err := dao.db.WithContext(ctx).Table(table).
+		Where("id = ?", id).First(&res).Error
+	return res, err
+}
+
+func (dao *MsgDAO) List(ctx context.Context, q Query) ([]LocalMsg, error) {
+	var res []LocalMsg
+	db := dao.db.WithContext(ctx).
+		Offset(q.Offset).
+		Limit(q.Limit).
+		Table(q.Table).Order("id DESC")
+	if q.Status >= 0 {
+		db = db.Where("status=?", q.Status)
+	}
+	if q.Key != "" {
+		db = db.Where("`key` = ?", q.Key)
+	}
+
+	if q.StartTime > 0 {
+		db = db.Where("`utime` >= ?", q.StartTime)
+	}
+
+	if q.EndTime > 0 {
+		db = db.Where("`utime` <= ?", q.EndTime)
+	}
+
+	err := db.Find(&res).Error
+	return res, err
+}
+
+func NewMsgDAO(db *gorm.DB) *MsgDAO {
+	return &MsgDAO{
+		db: db,
+	}
+}
+
+type Query struct {
+	Table  string
+	Offset int
+	Limit  int
+	Status int8
+	// Key 是精准查询
+	Key string
+
+	StartTime int64
+	EndTime   int64
+}
+
 type LocalMsg struct {
 	Id int64 `gorm:"primaryKey,autoIncrement"`
 
@@ -24,7 +74,7 @@ type LocalMsg struct {
 
 	// 在更新时间和 status 上创建联合索引，
 	// 保证在 WHERE 过滤数据的时候，不需要回表
-	Status uint8 `gorm:"index:utime_status"`
+	Status int8 `gorm:"index:utime_status"`
 	// 更新时间
 	Utime int64 `gorm:"index:utime_status"`
 	Ctime int64
@@ -35,17 +85,7 @@ func (l LocalMsg) TableName() string {
 }
 
 const (
-	MsgStatusInit uint8 = iota
+	MsgStatusInit int8 = iota
 	MsgStatusSuccess
 	MsgStatusFail
 )
-
-// FindSuspendMsg 找到还没有发送成功的消息
-func (dao *MsgDAO) FindSuspendMsg(ctx context.Context, offset, limit int) ([]LocalMsg, error) {
-	now := time.Now().Unix()
-	utime := now - dao.duration.Milliseconds()
-	var res []LocalMsg
-	err := dao.db.WithContext(ctx).Where("status=? AND utime < ?", MsgStatusInit, utime).
-		Limit(limit).Offset(offset).Find(&res).Error
-	return res, err
-}

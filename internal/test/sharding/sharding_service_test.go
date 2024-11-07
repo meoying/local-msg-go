@@ -193,32 +193,32 @@ func (s *OrderServiceTestSuite) TestAsyncTask() {
 	msgs := make([]dao.LocalMsg, 0, 4)
 	now := time.Now().UnixMilli()
 	// id = 1 的会取出来
-	msg1 := s.MockLocalMsg(1, now-(time.Second*11).Milliseconds())
+	msg1 := s.MockDAOMsg(1, now-(time.Second*11).Milliseconds())
 	msgs = append(msgs, msg1)
 
 	// id = 2 的不会取出来，因为已经彻底失败了
-	msg2 := s.MockLocalMsg(2, now-(time.Second*11).Milliseconds())
+	msg2 := s.MockDAOMsg(2, now-(time.Second*11).Milliseconds())
 	msg2.Status = dao.MsgStatusFail
 	msgs = append(msgs, msg2)
 
 	// id = 3 的不会取出来，因为已经成功了
-	msg3 := s.MockLocalMsg(3, now-(time.Second*11).Milliseconds())
+	msg3 := s.MockDAOMsg(3, now-(time.Second*11).Milliseconds())
 	msg3.Status = dao.MsgStatusSuccess
 	msgs = append(msgs, msg3)
 
 	// id = 4 的不会取出来，因为还没到时间间隔，业务可能还在处理中
-	msg4 := s.MockLocalMsg(4, now-(time.Second*1).Milliseconds())
+	msg4 := s.MockDAOMsg(4, now-(time.Second*1).Milliseconds())
 	msg4.Status = dao.MsgStatusInit
 	msgs = append(msgs, msg4)
 
 	// id = 5 会取出来，但是它只有最后一次发送机会了，发送会成功
-	msg5 := s.MockLocalMsg(5, now-(time.Second*13).Milliseconds())
+	msg5 := s.MockDAOMsg(5, now-(time.Second*13).Milliseconds())
 	msg5.Status = dao.MsgStatusInit
 	msg5.SendTimes = 2
 	msgs = append(msgs, msg5)
 
 	// id = 6 会取出来，但是它只有最后一次发送机会了，发送会失败
-	msg6 := s.MockLocalMsg(6, now-(time.Second*13).Milliseconds())
+	msg6 := s.MockDAOMsg(6, now-(time.Second*13).Milliseconds())
 	msg6.Status = dao.MsgStatusInit
 	msg6.SendTimes = 2
 

@@ -23,7 +23,7 @@ func (s *BaseSuite) AssertMsg(
 	assert.Equal(s.T(), expect, actual)
 }
 
-func (s *BaseSuite) MockLocalMsg(id int64, utime int64) dao.LocalMsg {
+func (s *BaseSuite) MockDAOMsg(id int64, utime int64) dao.LocalMsg {
 	var key string
 	if id%2 == 1 {
 		key = fmt.Sprintf("%d_success", id)
