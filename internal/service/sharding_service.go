@@ -39,8 +39,8 @@ func NewShardingService(dbs map[string]*gorm.DB, producer sarama.SyncProducer, s
 		Sharding:     sharding,
 		WaitDuration: time.Second * 30,
 		MaxTimes:     3,
-		Logger:       slog.Default(),
 		BatchSize:    10,
+		Logger:       slog.Default(),
 	}
 }
 
@@ -61,21 +61,23 @@ func (svc *ShardingService) StartAsyncTask(ctx context.Context) {
 }
 
 // SendMsg 发送消息
-func (svc *ShardingService) SendMsg(ctx context.Context, msg msg.Msg) {
-	dst := svc.Sharding.ShardingFunc(msg)
+func (svc *ShardingService) SendMsg(ctx context.Context, shardingInfo any, msg msg.Msg) {
+	dst := svc.Sharding.ShardingFunc(shardingInfo)
 	dmsg := svc.newDmsg(msg)
-	svc.sendMsg(ctx, svc.DBs[dst.DB], dmsg)
+	svc.sendMsg(ctx, svc.DBs[dst.DB], dmsg, dst.Table)
 }
 
 // SaveMsg 手动保存接口, tx 必须是你的本地事务
-func (svc *ShardingService) SaveMsg(tx *gorm.DB, msg msg.Msg) error {
+func (svc *ShardingService) SaveMsg(tx *gorm.DB, shardingInfo any, msg msg.Msg) error {
 	dmsg := svc.newDmsg(msg)
 	return tx.Create(&dmsg).Error
 }
 
 func (svc *ShardingService) execTx(ctx context.Context,
 	db *gorm.DB,
-	biz func(tx *gorm.DB) (msg.Msg, error)) error {
+	biz func(tx *gorm.DB) (msg.Msg, error),
+	table string,
+) error {
 	var dmsg *dao.LocalMsg
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		m, err := biz(tx)
@@ -83,10 +85,10 @@ func (svc *ShardingService) execTx(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		return tx.Create(dmsg).Error
+		return tx.Table(table).Create(dmsg).Error
 	})
 	if err == nil {
-		svc.sendMsg(ctx, db, dmsg)
+		svc.sendMsg(ctx, db, dmsg, table)
 	}
 	return err
 }
@@ -96,14 +98,15 @@ func (svc *ShardingService) execTx(ctx context.Context,
 // 第二个参数你需要传入 msg，因为我们需要必要的信息来执行分库分表，找到目标库
 // 第三个参数 biz 里面再次返回的 msg.Msg 会作为最终的消息内容，写入到数据库的，以及发送出去
 func (svc *ShardingService) ExecTx(ctx context.Context,
-	msg msg.Msg,
+	shardingInfo any,
 	biz func(tx *gorm.DB) (msg.Msg, error)) error {
-	dst := svc.Sharding.ShardingFunc(msg)
+	dst := svc.Sharding.ShardingFunc(shardingInfo)
 	db := svc.DBs[dst.DB]
-	return svc.execTx(ctx, db, biz)
+	return svc.execTx(ctx, db, biz, dst.Table)
 }
 
-func (svc *ShardingService) sendMsg(ctx context.Context, db *gorm.DB, dmsg *dao.LocalMsg) {
+func (svc *ShardingService) sendMsg(ctx context.Context,
+	db *gorm.DB, dmsg *dao.LocalMsg, table string) {
 	var msg msg.Msg
 	err := json.Unmarshal(dmsg.Data, &msg)
 	if err != nil {
@@ -122,7 +125,7 @@ func (svc *ShardingService) sendMsg(ctx context.Context, db *gorm.DB, dmsg *dao.
 		svc.Logger.Error("发送消息失败",
 			slog.String("topic", msg.Topic),
 			slog.String("key", msg.Key),
-			slog.Int("send_times", dmsg.SendTimes),
+			slog.Int("send_times", times),
 		)
 		if times >= svc.MaxTimes {
 			fields["status"] = dao.MsgStatusFail
@@ -131,7 +134,8 @@ func (svc *ShardingService) sendMsg(ctx context.Context, db *gorm.DB, dmsg *dao.
 		fields["status"] = dao.MsgStatusSuccess
 	}
 
-	err1 := db.WithContext(ctx).Model(dmsg).Where("id=?", dmsg.Id).
+	err1 := db.WithContext(ctx).Model(dmsg).Table(table).
+		Where("id=?", dmsg.Id).
 		Updates(fields).Error
 	if err1 != nil {
 		svc.Logger.Error("发送消息但是更新消息失败",
@@ -139,7 +143,7 @@ func (svc *ShardingService) sendMsg(ctx context.Context, db *gorm.DB, dmsg *dao.
 			slog.Bool("success", err1 == nil),
 			slog.String("topic", msg.Topic),
 			slog.String("key", msg.Key),
-			slog.Int("send_times", dmsg.SendTimes),
+			slog.Int("send_times", times),
 			slog.Any("err", err1),
 		)
 	}

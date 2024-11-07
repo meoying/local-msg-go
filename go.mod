@@ -6,6 +6,7 @@ toolchain go1.23.1
 
 require (
 	github.com/IBM/sarama v1.43.3
+	github.com/bwmarrin/snowflake v0.3.0
 	github.com/ecodeclub/ekit v0.0.9-0.20241102091017-a4ff9fc1f3bc
 	github.com/ecodeclub/ginx v0.0.0-20240529151605-6f3c1e323607
 	github.com/gin-gonic/gin v1.10.0

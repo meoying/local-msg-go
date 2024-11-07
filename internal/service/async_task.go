@@ -63,7 +63,7 @@ func (task *AsyncTask) loop(ctx context.Context) int {
 	for _, msg := range data {
 		shadow := msg
 		eg.Go(func() error {
-			task.svc.sendMsg(loopCtx, task.db, &shadow)
+			task.svc.sendMsg(loopCtx, task.db, &shadow, task.dst.Table)
 			return nil
 		})
 	}
@@ -78,7 +78,7 @@ func (task *AsyncTask) findSuspendMsg(ctx context.Context, offset, limit int) ([
 	// 这不用检测重试次数，因为重试次数达到了的话，状态会修改
 	err := task.db.WithContext(ctx).
 		// 考虑到分库分表的问题，这里需要指定表名
-		Table(task.dst.TableName()).
+		Table(task.dst.Table).
 		Where("status=? AND utime < ?", dao.MsgStatusInit, utime).
 		Limit(limit).Offset(offset).Find(&res).Error
 	return res, err

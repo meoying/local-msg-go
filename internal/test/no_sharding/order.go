@@ -1,4 +1,4 @@
-package no_shard
+package no_sharding
 
 import (
 	"context"
@@ -45,7 +45,8 @@ type Order struct {
 
 	// 我这里就懒得加了
 
-	SN string
+	SN    string
+	Buyer int64
 
 	Utime int64
 	Ctime int64

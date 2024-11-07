@@ -14,5 +14,5 @@ type Service struct {
 func (svc *Service) ExecTx(ctx context.Context,
 	biz func(tx *gorm.DB) (msg.Msg, error)) error {
 	db := svc.DBs[""]
-	return svc.execTx(ctx, db, biz)
+	return svc.execTx(ctx, db, biz, "")
 }

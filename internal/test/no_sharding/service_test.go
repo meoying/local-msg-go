@@ -1,15 +1,13 @@
-package no_shard
+package no_sharding
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/IBM/sarama"
 	lmsg "github.com/meoying/local-msg-go"
 	"github.com/meoying/local-msg-go/internal/dao"
-	msg2 "github.com/meoying/local-msg-go/internal/msg"
+	"github.com/meoying/local-msg-go/internal/test"
 	"github.com/meoying/local-msg-go/internal/test/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,8 +22,8 @@ import (
 // OrderServiceTestSuite 没有分库分表的测试
 // 因为 Kafka 消息发送成功与否完全不可控，所以这里用 mock 接口来替代
 type OrderServiceTestSuite struct {
-	suite.Suite
 	db *gorm.DB
+	test.BaseSuite
 }
 
 func TestService(t *testing.T) {
@@ -44,9 +42,9 @@ func (s *OrderServiceTestSuite) SetupSuite() {
 func (s *OrderServiceTestSuite) TearDownTest() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := s.db.WithContext(ctx).Exec("DROP TABLE IF EXISTS orders;").Error
+	err := s.db.WithContext(ctx).Exec("TRUNCATE TABLE orders;").Error
 	assert.NoError(s.T(), err)
-	err = s.db.WithContext(ctx).Exec("DROP TABLE IF EXISTS local_msgs;").Error
+	err = s.db.WithContext(ctx).Exec("TRUNCATE TABLE local_msgs;").Error
 	assert.NoError(s.T(), err)
 }
 
@@ -57,32 +55,32 @@ func (s *OrderServiceTestSuite) TestAsyncTask() {
 	msgs := make([]dao.LocalMsg, 0, 4)
 	now := time.Now().UnixMilli()
 	// id = 1 的会取出来
-	msg1 := s.mockLocalMsg(1, now-(time.Second*11).Milliseconds())
+	msg1 := s.MockLocalMsg(1, now-(time.Second*11).Milliseconds())
 	msgs = append(msgs, msg1)
 
 	// id = 2 的不会取出来，因为已经彻底失败了
-	msg2 := s.mockLocalMsg(2, now-(time.Second*11).Milliseconds())
+	msg2 := s.MockLocalMsg(2, now-(time.Second*11).Milliseconds())
 	msg2.Status = dao.MsgStatusFail
 	msgs = append(msgs, msg2)
 
 	// id = 3 的不会取出来，因为已经成功了
-	msg3 := s.mockLocalMsg(3, now-(time.Second*11).Milliseconds())
+	msg3 := s.MockLocalMsg(3, now-(time.Second*11).Milliseconds())
 	msg3.Status = dao.MsgStatusSuccess
 	msgs = append(msgs, msg3)
 
 	// id = 4 的不会取出来，因为还没到时间间隔，业务可能还在处理中
-	msg4 := s.mockLocalMsg(4, now-(time.Second*1).Milliseconds())
+	msg4 := s.MockLocalMsg(4, now-(time.Second*1).Milliseconds())
 	msg4.Status = dao.MsgStatusInit
 	msgs = append(msgs, msg4)
 
 	// id = 5 会取出来，但是它只有最后一次发送机会了，发送会成功
-	msg5 := s.mockLocalMsg(5, now-(time.Second*13).Milliseconds())
+	msg5 := s.MockLocalMsg(5, now-(time.Second*13).Milliseconds())
 	msg5.Status = dao.MsgStatusInit
 	msg5.SendTimes = 2
 	msgs = append(msgs, msg5)
 
 	// id = 6 会取出来，但是它只有最后一次发送机会了，发送会失败
-	msg6 := s.mockLocalMsg(6, now-(time.Second*13).Milliseconds())
+	msg6 := s.MockLocalMsg(6, now-(time.Second*13).Milliseconds())
 	msg6.Status = dao.MsgStatusInit
 	msg6.SendTimes = 2
 
@@ -123,22 +121,22 @@ func (s *OrderServiceTestSuite) TestAsyncTask() {
 	// id 为 1
 	msg1.Status = dao.MsgStatusSuccess
 	msg1.SendTimes = 1
-	s.assertMsg(msg1, msgs[0])
+	s.AssertMsg(msg1, msgs[0])
 
 	// id = 2 不会变
-	s.assertMsg(msg2, msgs[1])
+	s.AssertMsg(msg2, msgs[1])
 	// id = 3 的不会变
-	s.assertMsg(msg3, msgs[2])
+	s.AssertMsg(msg3, msgs[2])
 	// id = 4 的不会变
-	s.assertMsg(msg4, msgs[3])
+	s.AssertMsg(msg4, msgs[3])
 	// id = 5
 	msg5.Status = dao.MsgStatusSuccess
 	msg5.SendTimes = 3
-	s.assertMsg(msg5, msgs[4])
+	s.AssertMsg(msg5, msgs[4])
 	// id = 6
 	msg6.Status = dao.MsgStatusFail
 	msg6.SendTimes = 3
-	s.assertMsg(msg6, msgs[5])
+	s.AssertMsg(msg6, msgs[5])
 }
 
 func (s *OrderServiceTestSuite) TestCreateOrder() {
@@ -214,39 +212,5 @@ func (s *OrderServiceTestSuite) TestCreateOrder() {
 			assert.Equal(t, tc.wantErr, err)
 			tc.after(t)
 		})
-	}
-}
-
-func (s *OrderServiceTestSuite) assertMsg(
-	expect dao.LocalMsg,
-	actual dao.LocalMsg) {
-	expect.Utime = 0
-	expect.Ctime = 0
-	actual.Utime = 0
-	actual.Ctime = 0
-	assert.Equal(s.T(), expect, actual)
-}
-
-func (s *OrderServiceTestSuite) mockLocalMsg(id int64, utime int64) dao.LocalMsg {
-	var key string
-	if id%2 == 1 {
-		key = fmt.Sprintf("%d_success", id)
-	} else {
-		key = fmt.Sprintf("%d_fail", id)
-	}
-
-	msg := msg2.Msg{
-		Key:     key,
-		Topic:   "order_created",
-		Content: []byte("这是内容"),
-	}
-	val, _ := json.Marshal(msg)
-	return dao.LocalMsg{
-		Id:     id,
-		Key:    key,
-		Data:   val,
-		Status: dao.MsgStatusInit,
-		Utime:  utime,
-		Ctime:  utime,
 	}
 }
