@@ -22,6 +22,7 @@ func NewLocalService(producer sarama.SyncProducer) *LocalService {
 	return &LocalService{
 		daos:     make(map[string]map[string]*dao.MsgDAO),
 		producer: producer,
+		svcs:     make(map[string]*service.ShardingService, 4),
 	}
 }
 
@@ -38,6 +39,7 @@ func (svc *LocalService) RegisterShardingSvc(biz string, s *service.ShardingServ
 		m[k] = dao.NewMsgDAO(db)
 	}
 	svc.daos[biz] = m
+	svc.svcs[biz] = s
 	return nil
 }
 
@@ -49,8 +51,9 @@ func (svc *LocalService) Retry(ctx context.Context,
 	if err != nil {
 		return err
 	}
+	data := string(localMsg.Data)
 	var m msg.Msg
-	err = json.Unmarshal(localMsg.Data, &m)
+	err = json.Unmarshal([]byte(data), &m)
 	if err != nil {
 		return err
 	}
@@ -60,8 +63,7 @@ func (svc *LocalService) Retry(ctx context.Context,
 // ListMsgs 返回未发送的消息
 func (svc *LocalService) ListMsgs(
 	ctx context.Context,
-	biz, db string,
-	query Query) ([]LocalMsg, error) {
+	biz, db string, query Query) ([]LocalMsg, error) {
 	msgDAO := svc.getDAO(biz, db)
 	res, err := msgDAO.List(ctx, query)
 	if err != nil {

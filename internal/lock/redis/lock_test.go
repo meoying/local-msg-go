@@ -28,12 +28,12 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-type ClientE2ESuite struct {
+type LockTestSuite struct {
 	suite.Suite
 	rdb redis.Cmdable
 }
 
-func (s *ClientE2ESuite) SetupSuite() {
+func (s *LockTestSuite) SetupSuite() {
 	s.rdb = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password set
@@ -45,11 +45,11 @@ func (s *ClientE2ESuite) SetupSuite() {
 	}
 }
 
-func TestClientE2E(t *testing.T) {
-	suite.Run(t, &ClientE2ESuite{})
+func TestLock(t *testing.T) {
+	suite.Run(t, &LockTestSuite{})
 }
 
-func (s *ClientE2ESuite) TestLock() {
+func (s *LockTestSuite) TestLock() {
 	t := s.T()
 	rdb := s.rdb
 	testCases := []struct {
@@ -126,7 +126,7 @@ func (s *ClientE2ESuite) TestLock() {
 	}
 }
 
-func (s *ClientE2ESuite) TestRefresh() {
+func (s *LockTestSuite) TestRefresh() {
 	t := s.T()
 	rdb := s.rdb
 	testCases := []struct {
@@ -188,7 +188,7 @@ func (s *ClientE2ESuite) TestRefresh() {
 				rdb.Del(context.Background(), "refresh-key")
 			},
 			timeout: time.Minute,
-			wantErr: errs.ErrLocked,
+			wantErr: errs.ErrLockNotHold,
 		},
 	}
 
@@ -204,7 +204,7 @@ func (s *ClientE2ESuite) TestRefresh() {
 	}
 }
 
-func (s *ClientE2ESuite) TestUnLock() {
+func (s *LockTestSuite) TestUnLock() {
 	t := s.T()
 	rdb := s.rdb
 	testCases := []struct {
@@ -238,7 +238,7 @@ func (s *ClientE2ESuite) TestUnLock() {
 		{
 			name:    "lock not hold",
 			lock:    NewLock(rdb, "not-hold-key", time.Minute),
-			wantErr: errs.ErrLocked,
+			wantErr: errs.ErrLockNotHold,
 		},
 	}
 

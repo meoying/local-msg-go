@@ -1,4 +1,4 @@
-package gorm
+package glock
 
 const (
 	// ModeInsertFirst 是指默认要加的分布式锁大概率还没有人加过

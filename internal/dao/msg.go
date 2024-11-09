@@ -34,11 +34,11 @@ func (dao *MsgDAO) List(ctx context.Context, q Query) ([]LocalMsg, error) {
 	}
 
 	if q.StartTime > 0 {
-		db = db.Where("`utime` >= ?", q.StartTime)
+		db = db.Where("`ctime` >= ?", q.StartTime)
 	}
 
 	if q.EndTime > 0 {
-		db = db.Where("`utime` <= ?", q.EndTime)
+		db = db.Where("`ctime` <= ?", q.EndTime)
 	}
 
 	err := db.Find(&res).Error
@@ -52,15 +52,15 @@ func NewMsgDAO(db *gorm.DB) *MsgDAO {
 }
 
 type Query struct {
-	Table  string
-	Offset int
-	Limit  int
-	Status int8
+	Table  string `json:"table,omitempty"`
+	Offset int    `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+	Status int8   `json:"status,omitempty"`
 	// Key 是精准查询
-	Key string
+	Key string `json:"key,omitempty"`
 
-	StartTime int64
-	EndTime   int64
+	StartTime int64 `json:"startTime,omitempty"`
+	EndTime   int64 `json:"endTime,omitempty"`
 }
 
 type LocalMsg struct {
@@ -68,7 +68,7 @@ type LocalMsg struct {
 
 	// Key 是业务的凭证，可以是唯一的，也可以不是唯一的，我们不在意
 	Key  string `gorm:"index"`
-	Data []byte `gorm:"type:BLOB"`
+	Data []byte `gorm:"type:TEXT"`
 	// 发送次数，也就是说，立即发送之后，这个计数就会 +1
 	SendTimes int
 

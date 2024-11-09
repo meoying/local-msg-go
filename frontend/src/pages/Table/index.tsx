@@ -161,7 +161,9 @@ const TableList: React.FC<unknown> = () => {
             新建
           </Button>,
         ]}
-        request={async (params, sorter, filter) => {
+        request={async (params,
+                        sorter,
+                        filter) => {
           const { data, success } = await queryUserList({
             ...params,
             // FIXME: remove @ts-ignore

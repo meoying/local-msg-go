@@ -9,9 +9,12 @@ import (
 	"github.com/bwmarrin/snowflake"
 	lmsg "github.com/meoying/local-msg-go"
 	"github.com/meoying/local-msg-go/internal/dao"
+	dlock "github.com/meoying/local-msg-go/internal/lock"
+	glock "github.com/meoying/local-msg-go/internal/lock/gorm"
 	"github.com/meoying/local-msg-go/internal/sharding"
 	"github.com/meoying/local-msg-go/internal/test"
 	"github.com/meoying/local-msg-go/internal/test/mocks"
+	"github.com/meoying/local-msg-go/mockbiz/sharding_order"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -27,7 +30,8 @@ type OrderServiceTestSuite struct {
 	db01 *gorm.DB
 	dbs  map[string]*gorm.DB
 	test.BaseSuite
-	rules sharding.Sharding
+	rules      sharding.Sharding
+	lockClient dlock.Client
 }
 
 func (s *OrderServiceTestSuite) SetupSuite() {
@@ -45,6 +49,10 @@ func (s *OrderServiceTestSuite) SetupSuite() {
 	s.db00 = db00
 	s.db01 = db01
 	s.dbs = dbs
+	lockClient := glock.NewClient(s.db00)
+	err = lockClient.InitTable()
+	require.NoError(s.T(), err)
+	s.lockClient = lockClient
 	s.rules = sharding.Sharding{
 		ShardingFunc: func(info any) sharding.Dst {
 			buyer := info.(int64)
@@ -89,6 +97,9 @@ func (s *OrderServiceTestSuite) TearDownTest() {
 	err = s.db00.Exec("TRUNCATE TABLE local_msgs_tab_00").Error
 	require.NoError(s.T(), err)
 	err = s.db00.Exec("TRUNCATE TABLE local_msgs_tab_01").Error
+	require.NoError(s.T(), err)
+
+	err = s.db00.Exec("TRUNCATE TABLE distributed_locks").Error
 	require.NoError(s.T(), err)
 
 	err = s.db01.Exec("TRUNCATE TABLE orders_tab_00").Error
@@ -176,8 +187,8 @@ func (s *OrderServiceTestSuite) TestCreateOrder() {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			producer := tc.mock(ctrl)
-			msgSvc := lmsg.NewDefaultShardingService(s.dbs, producer, rules)
-			svc := NewOrderService(node, msgSvc)
+			msgSvc := lmsg.NewDefaultShardingService(s.dbs, producer, s.lockClient, rules)
+			svc := sharding_order.NewOrderService(node, msgSvc)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 			defer cancel()
 			err := svc.CreateOrder(ctx, tc.sn, tc.buyer)
@@ -241,7 +252,10 @@ func (s *OrderServiceTestSuite) TestAsyncTask() {
 		return 0, 0, errors.New("mock error")
 	}).AnyTimes()
 
-	svc := lmsg.NewDefaultShardingService(s.dbs, producer, s.rules)
+	svc := lmsg.NewDefaultShardingService(s.dbs,
+		producer,
+		s.lockClient,
+		s.rules)
 	svc.WaitDuration = time.Second * 10
 	svc.MaxTimes = 3
 	// 两条一批，减少构造数据

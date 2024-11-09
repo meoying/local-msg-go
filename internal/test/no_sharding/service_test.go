@@ -9,6 +9,7 @@ import (
 	"github.com/meoying/local-msg-go/internal/dao"
 	"github.com/meoying/local-msg-go/internal/test"
 	"github.com/meoying/local-msg-go/internal/test/mocks"
+	"github.com/meoying/local-msg-go/mockbiz/noshardin_order"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -34,7 +35,7 @@ func (s *OrderServiceTestSuite) SetupSuite() {
 	db, err := gorm.Open(mysql.Open("root:root@tcp(localhost:13316)/local_msg_test?charset=utf8mb4&collation=utf8mb4_general_ci&parseTime=True&loc=Local&timeout=1s&readTimeout=3s&writeTimeout=3s"))
 	require.NoError(s.T(), err)
 	// 先把表建好
-	err = db.AutoMigrate(&dao.LocalMsg{}, &Order{})
+	err = db.AutoMigrate(&dao.LocalMsg{}, &noshardin_order.Order{})
 	require.NoError(s.T(), err)
 	s.db = db
 }
@@ -98,7 +99,8 @@ func (s *OrderServiceTestSuite) TestAsyncTask() {
 		return 0, 0, errors.New("mock error")
 	}).AnyTimes()
 
-	svc := lmsg.NewDefaultService(s.db, producer)
+	svc, err := lmsg.NewDefaultService(s.db, producer)
+	assert.NoError(s.T(), err)
 	svc.WaitDuration = time.Second * 10
 	svc.MaxTimes = 3
 	// 两条一批，减少构造数据
@@ -204,11 +206,12 @@ func (s *OrderServiceTestSuite) TestCreateOrder() {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			producer := tc.mock(ctrl)
-			msgSvc := lmsg.NewDefaultService(s.db, producer)
-			svc := NewOrderService(s.db, msgSvc)
+			msgSvc, err := lmsg.NewDefaultService(s.db, producer)
+			assert.NoError(s.T(), err)
+			svc := noshardin_order.NewOrderService(s.db, msgSvc)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 			defer cancel()
-			err := svc.CreateOrder(ctx, tc.sn)
+			err = svc.CreateOrder(ctx, tc.sn)
 			assert.Equal(t, tc.wantErr, err)
 			tc.after(t)
 		})

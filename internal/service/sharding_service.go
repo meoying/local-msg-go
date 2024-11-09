@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/IBM/sarama"
 	"github.com/meoying/local-msg-go/internal/dao"
+	dlock "github.com/meoying/local-msg-go/internal/lock"
 	"github.com/meoying/local-msg-go/internal/msg"
 	"github.com/meoying/local-msg-go/internal/sharding"
 	"gorm.io/gorm"
@@ -30,10 +31,16 @@ type ShardingService struct {
 	MaxTimes  int
 	BatchSize int
 
+	LockClient dlock.Client
+
 	Logger *slog.Logger
 }
 
-func NewShardingService(dbs map[string]*gorm.DB, producer sarama.SyncProducer, sharding sharding.Sharding) *ShardingService {
+func NewShardingService(
+	dbs map[string]*gorm.DB,
+	producer sarama.SyncProducer,
+	lockClient dlock.Client,
+	sharding sharding.Sharding) *ShardingService {
 	return &ShardingService{
 		DBs:          dbs,
 		Producer:     producer,
@@ -42,6 +49,7 @@ func NewShardingService(dbs map[string]*gorm.DB, producer sarama.SyncProducer, s
 		MaxTimes:     3,
 		BatchSize:    10,
 		Logger:       slog.Default(),
+		LockClient:   lockClient,
 	}
 }
 
@@ -54,6 +62,7 @@ func (svc *ShardingService) StartAsyncTask(ctx context.Context) {
 			dst:          dst,
 			batchSize:    svc.BatchSize,
 			logger:       svc.Logger,
+			lockClient:   svc.LockClient,
 		}
 		go func() {
 			task.Start(ctx)

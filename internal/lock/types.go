@@ -1,6 +1,14 @@
 package dlock
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+type Client interface {
+	// NewLock 初始化一个锁
+	NewLock(ctx context.Context, key string, expiration time.Duration) (Lock, error)
+}
 
 type Lock interface {
 	Lock(ctx context.Context) error

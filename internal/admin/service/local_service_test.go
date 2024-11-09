@@ -52,6 +52,9 @@ func (s *LocalServiceTestSuite) TearDownTest() {
 	err = s.db00.Exec("TRUNCATE TABLE local_msgs_tab_01").Error
 	require.NoError(s.T(), err)
 
+	// 分布式锁使用的数据
+	err = s.db01.Exec("TRUNCATE TABLE distributed_locks").Error
+
 	err = s.db01.Exec("TRUNCATE TABLE orders_tab_00").Error
 	require.NoError(s.T(), err)
 	err = s.db01.Exec("TRUNCATE TABLE orders_tab_01").Error
@@ -138,7 +141,7 @@ func (s *LocalServiceTestSuite) TestList() {
 	}
 
 	svc := NewLocalService(nil)
-	err := svc.RegisterShardingSvc("test", service.NewShardingService(s.dbs, nil, sharding.Sharding{}))
+	err := svc.RegisterShardingSvc("test", service.NewShardingService(s.dbs, nil, nil, sharding.Sharding{}))
 	require.NoError(s.T(), err)
 	for _, tc := range testCases {
 		s.T().Run(tc.name, func(t *testing.T) {
@@ -166,7 +169,7 @@ func (s *LocalServiceTestSuite) MockLocalMsg(
 	msg := msg2.Msg{
 		Key:     key,
 		Topic:   "order_created",
-		Content: []byte("这是内容"),
+		Content: "这是内容",
 	}
 	res := LocalMsg{
 		Id:     id,

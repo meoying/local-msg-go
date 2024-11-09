@@ -34,7 +34,7 @@ func (s *BaseSuite) MockDAOMsg(id int64, utime int64) dao.LocalMsg {
 	msg := msg2.Msg{
 		Key:     key,
 		Topic:   "order_created",
-		Content: []byte("这是内容"),
+		Content: "这是内容",
 	}
 	val, _ := json.Marshal(msg)
 	return dao.LocalMsg{

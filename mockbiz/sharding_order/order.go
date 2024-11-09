@@ -1,4 +1,4 @@
-package sharding
+package sharding_order
 
 import (
 	"context"
@@ -51,7 +51,7 @@ func (svc *OrderService) CreateOrder(
 			Key:   sn,
 			Topic: "order_created",
 			// 例如时候，要是有必要可以把 ID 传递过去
-			Content: []byte(sn),
+			Content: sn,
 		}, nil
 	})
 	return err

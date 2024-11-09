@@ -1,4 +1,4 @@
-package no_sharding
+package noshardin_order
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func (svc *OrderService) CreateOrder(ctx context.Context, sn string) error {
 			// 使用 SN 作为 key，也可以换成 id
 			Key:     sn,
 			Topic:   "order_created",
-			Content: []byte(sn),
+			Content: sn,
 		}, err
 	})
 	return err

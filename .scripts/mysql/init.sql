@@ -11,6 +11,24 @@ create table local_msg_test.orders
     buyer bigint   null
 );
 
+create table local_msg_test.local_msgs
+(
+    id         bigint auto_increment
+        primary key,
+    `key`      varchar(191)     null,
+    data       TEXT             null,
+    send_times bigint           null,
+    status     tinyint unsigned null,
+    utime      bigint           null,
+    ctime      bigint           null
+);
+
+create index idx_local_msgs_key
+    on local_msg_test.local_msgs (`key`);
+
+create index utime_status
+    on local_msg_test.local_msgs (status, utime);
+
 -- 下面这些用来测试分库分表
 -- 分成两个库
 CREATE DATABASE IF NOT EXISTS `orders_db_00`;

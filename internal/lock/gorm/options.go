@@ -1,4 +1,4 @@
-package gorm
+package glock
 
 import "github.com/ecodeclub/ekit/bean/option"
 
