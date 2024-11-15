@@ -33,6 +33,6 @@ func NewDefaultService(
 func NewDefaultShardingService(dbs map[string]*gorm.DB,
 	producer sarama.SyncProducer,
 	lockClient dlock.Client,
-	sharding sharding.Sharding) *service.ShardingService {
-	return service.NewShardingService(dbs, producer, lockClient, sharding)
+	sharding sharding.Sharding,opts ...service.ShardingServiceOpt) *service.ShardingService {
+	return service.NewShardingService(dbs, producer, lockClient, sharding,opts...)
 }

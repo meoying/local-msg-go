@@ -39,3 +39,9 @@ CREATE TABLE `orders_db_00`.orders_tab_01 LIKE `local_msg_test`.orders;
 
 CREATE TABLE `orders_db_01`.orders_tab_00 LIKE `local_msg_test`.orders;
 CREATE TABLE `orders_db_01`.orders_tab_01 LIKE `local_msg_test`.orders;
+
+CREATE TABLE `orders_db_00`.local_msgs_tab_00 LIKE `local_msg_test`.local_msgs;
+CREATE TABLE `orders_db_00`.local_msgs_tab_01 LIKE `local_msg_test`.local_msgs;
+
+CREATE TABLE `orders_db_01`.local_msgs_tab_00 LIKE `local_msg_test`.local_msgs;
+CREATE TABLE `orders_db_01`.local_msgs_tab_01 LIKE `local_msg_test`.local_msgs;
