@@ -32,6 +32,7 @@ type AsyncTask struct {
 // Start 开启补偿任务。当 ctx 过期或者被取消的时候，就会退出
 func (task *AsyncTask) Start(ctx context.Context) {
 	key := fmt.Sprintf("%s.%s", task.dst.DB, task.dst.Table)
+	task.logger = task.logger.With(slog.String("key", key))
 	interval := time.Minute
 	for {
 		// 每个循环过程就是一次尝试拿到分布式锁之后，不断调度的过程
@@ -62,6 +63,11 @@ func (task *AsyncTask) Start(ctx context.Context) {
 		}
 		// 开启任务循环
 		task.refreshAndLoop(ctx, lock)
+		// 只要这个方法返回，就说明你需要释放掉分布式锁，
+		// 比如说因为负载、异常等问题，导致你已经无法继续执行下去了
+		if unErr := lock.Unlock(ctx); unErr != nil {
+			task.logger.Error("释放分布式锁失败", slog.Any("err", unErr.Error()))
+		}
 		// 从这里退出的时候，要检测一下是不是需要结束了
 		ctxErr := ctx.Err()
 		switch {
@@ -134,7 +140,7 @@ func (task *AsyncTask) loop(ctx context.Context) (int, error) {
 	// 因为你每次都会更新时间和状态，所以你可以永远从 0 开始
 	data, err := task.findSuspendMsg(loopCtx, 0, task.batchSize)
 	if err != nil {
-		task.logger.Error("查询数据失败", slog.Any("err", err))
+		task.logger.Error("查询数据失败", slog.String("err", err.Error()))
 		return 0, fmt.Errorf("查询数据失败 %w", err)
 	}
 	task.logger.Debug("找到数据", slog.Int("cnt", len(data)))
