@@ -30,7 +30,7 @@ type ShardingService struct {
 	// 2. 当发送一次失败之后，要过这么久才会重试
 	WaitDuration time.Duration
 	// 用于补充任务发送消息
-	sender    MsgSender
+	executor  Executor
 	Producer  sarama.SyncProducer
 	MaxTimes  int
 	BatchSize int
@@ -49,34 +49,39 @@ func NewShardingService(
 		DBs:          dbs,
 		Producer:     producer,
 		Sharding:     sharding,
-		WaitDuration: time.Second * 30,
+		WaitDuration: 30 * time.Second,
 		MaxTimes:     3,
 		BatchSize:    10,
 		Logger:       slog.Default(),
 		LockClient:   lockClient,
 	}
 	// 默认为并发发送
-	svc.sender = NewCurMsgSender(svc)
+	svc.executor = NewCurMsgExecutor(svc)
 	for _, opt := range opts {
 		opt(svc)
 	}
 	return svc
 }
 
-func WithBatchSender() ShardingServiceOpt {
+func WithBatchExecutor() ShardingServiceOpt {
 	return func(service *ShardingService) {
-		service.sender = NewBatchMsgSender(service)
+		service.executor = NewBatchMsgExecutor(service)
+	}
+}
+
+func WithMetricExecutor() ShardingServiceOpt {
+	return func(service *ShardingService) {
+		service.executor = NewMetricExecutor(service.executor)
 	}
 }
 
 type ShardingServiceOpt func(service *ShardingService)
 
 func (svc *ShardingService) StartAsyncTask(ctx context.Context) {
-
 	for _, dst := range svc.Sharding.EffectiveTablesFunc() {
 		task := AsyncTask{
 			waitDuration: svc.WaitDuration,
-			msgSender:    svc.sender,
+			executor:     svc.executor,
 			db:           svc.DBs[dst.DB],
 			dst:          dst,
 			batchSize:    svc.BatchSize,
@@ -93,14 +98,6 @@ func (svc *ShardingService) StartAsyncTask(ctx context.Context) {
 func (svc *ShardingService) SendMsg(ctx context.Context, db, table string, msg msg.Msg) error {
 	dmsg := svc.newDmsg(msg)
 	return svc.sendMsg(ctx, svc.DBs[db], dmsg, table)
-}
-
-// BatchSendMsg 批量发送消息
-func (svc *ShardingService) BatchSendMsg(ctx context.Context, db, table string, msgs ...msg.Msg) error {
-	dmsgs := slice.Map(msgs, func(idx int, src msg.Msg) *dao.LocalMsg {
-		return svc.newDmsg(src)
-	})
-	return svc.sendMsgs(ctx, svc.DBs[db], dmsgs, table)
 }
 
 // SaveMsg 手动保存接口, tx 必须是你的本地事务

@@ -9,9 +9,11 @@ import (
 	"github.com/gin-gonic/gin"
 	lmsg "github.com/meoying/local-msg-go"
 	"github.com/meoying/local-msg-go/mockbiz/noshardin_order"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	redis2 "github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"net/http"
 	"os"
 	"os/signal"
 )
@@ -87,3 +89,13 @@ func main() {
 	// 调用 Cancel 就会停止补偿任务
 	cancel()
 }
+
+
+
+func initPrometheus() {
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.ListenAndServe(":8081", nil)
+	}()
+}
+

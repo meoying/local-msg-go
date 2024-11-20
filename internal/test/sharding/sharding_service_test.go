@@ -369,7 +369,7 @@ func (s *OrderServiceTestSuite) TestBatchAsyncTask() {
 		producer,
 		s.lockClient,
 		s.rules,
-		service.WithBatchSender())
+		service.WithBatchExecutor())
 	svc.WaitDuration = time.Second * 10
 	svc.MaxTimes = 3
 	// 两条一批，减少构造数据

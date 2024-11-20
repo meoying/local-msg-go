@@ -34,3 +34,14 @@ services:
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
     networks:
       default:
+  prometheus:
+    image: prom/prometheus:v2.47.2
+    volumes:
+      #  - 将本地的 prometheus 文件映射到容器内的配置文件
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+    ports:
+      #  - 访问数据的端口
+      - 9090:9090
+    command:
+      - "--web.enable-remote-write-receiver"
+      - "--config.file=/etc/prometheus/prometheus.yml"
