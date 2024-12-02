@@ -11,6 +11,7 @@ import (
 	"github.com/meoying/local-msg-go/internal/msg"
 	"github.com/meoying/local-msg-go/internal/sharding"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel"
 	"gorm.io/gorm"
 	"log/slog"
 	"strings"
@@ -111,6 +112,10 @@ func (svc *ShardingService) execTx(ctx context.Context,
 	biz func(tx *gorm.DB) (msg.Msg, error),
 	table string,
 ) error {
+	tracer := otel.Tracer("LocalMsg_ExecTx")
+	ctx, businessSpan := tracer.Start(ctx, "localMsg-span")
+	defer businessSpan.End() // 假设 BizLogic 是进行业务逻辑执行的函数
+	ctx, bizSpan := tracer.Start(ctx, "biz-span")
 	var dmsg *dao.LocalMsg
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		m, err := biz(tx)
@@ -120,11 +125,14 @@ func (svc *ShardingService) execTx(ctx context.Context,
 		}
 		return tx.Table(table).Create(dmsg).Error
 	})
+	bizSpan.End()
 	if err == nil {
+		ctx, sendSpan := tracer.Start(ctx, "sendToKafka-span")
 		err1 := svc.sendMsg(ctx, db, dmsg, table)
 		if err1 != nil {
-			slog.Error("发送消息出现问题", slog.Any("error", err))
+			slog.Error("发送消息出现问题", slog.Any("error", err1))
 		}
+		sendSpan.End()
 	}
 	return err
 }

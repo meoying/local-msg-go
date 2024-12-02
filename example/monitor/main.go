@@ -8,16 +8,21 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	lmsg "github.com/meoying/local-msg-go"
+	"github.com/meoying/local-msg-go/internal/service"
 	"github.com/meoying/local-msg-go/mockbiz/noshardin_order"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	redis2 "github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"net/http"
 	"os"
 	"os/signal"
 )
 
 // 这个是模拟业务在非分库分表的情况下，引入了依赖之后，直接在本地启动了管理后台的例子
 func main() {
+	// 初始化prometheus
+	initPrometheus()
 	// 包含三个步骤：
 	// 非分库分表的时候
 	// 1. 初始化 lmsg.Service。
@@ -36,7 +41,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	msgSvc, err := lmsg.NewDefaultService(db, producer)
+	// 初始化上报数据
+	msgSvc, err := lmsg.NewDefaultService(db, producer, service.WithMetricExecutor())
 	if err != nil {
 		panic(err)
 	}
@@ -46,8 +52,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		// 启动补偿任务
-		//msgSvc.StartAsyncTask(ctx)
-		println(ctx == nil)
+		msgSvc.StartAsyncTask(ctx)
+		//println(ctx == nil)
 	}()
 
 	go func() {
@@ -86,4 +92,11 @@ func main() {
 	<-signalChan
 	// 调用 Cancel 就会停止补偿任务
 	cancel()
+}
+
+func initPrometheus() {
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.ListenAndServe(":8081", nil)
+	}()
 }

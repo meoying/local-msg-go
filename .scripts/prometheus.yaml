@@ -1,4 +1,4 @@
 scrape_configs:
-  - job_name: ''
+  - job_name: 'async_job'
     static_configs:
-      - targets: ['']
+      - targets: ["host.docker.internal:8081"]

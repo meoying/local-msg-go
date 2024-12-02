@@ -7,17 +7,44 @@ import (
 	"github.com/ecodeclub/ginx/session/redis"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/lithammer/shortuuid/v4"
 	lmsg "github.com/meoying/local-msg-go"
 	"github.com/meoying/local-msg-go/mockbiz/noshardin_order"
 	redis2 "github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/zipkin"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"net/http"
 	"os"
 	"os/signal"
+	"time"
 )
 
 // 这个是模拟业务在非分库分表的情况下，引入了依赖之后，直接在本地启动了管理后台的例子
 func main() {
+	// 初始化trace监控
+	res, err := newResource("local-msg", "v0.0.1")
+	if err != nil {
+		panic(err)
+	}
+	prop := newPropagator()
+	// 在客户端和服务端之间传递 tracing 的相关信息
+	otel.SetTextMapPropagator(prop)
+
+	// 初始化 trace provider
+	// 这个 provider 就是用来在打点的时候构建 trace 的
+	tp, err := newTraceProvider(res)
+	if err != nil {
+		panic(err)
+	}
+	defer tp.Shutdown(context.Background())
+	otel.SetTracerProvider(tp)
+
 	// 包含三个步骤：
 	// 非分库分表的时候
 	// 1. 初始化 lmsg.Service。
@@ -42,6 +69,7 @@ func main() {
 	}
 	// 在业务中使用的订单服务
 	order := noshardin_order.NewOrderService(db, msgSvc)
+	initOrderSvc(order)
 	println(order)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -86,4 +114,62 @@ func main() {
 	<-signalChan
 	// 调用 Cancel 就会停止补偿任务
 	cancel()
+}
+
+// initOrderSvc 初始化order服务
+func initOrderSvc(orderSvc *noshardin_order.OrderService) {
+	server := gin.Default()
+	// 跨域
+	server.Use(cors.New(cors.Config{
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		// 你在这里可以控制允许的域名
+		AllowOriginFunc: func(origin string) bool {
+			return true
+		},
+	}))
+	server.GET("/order/create", func(c *gin.Context) {
+		var ctx context.Context = c
+		err := orderSvc.CreateOrder(ctx, shortuuid.New())
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "msg": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "成功", "data": nil})
+	})
+	// 启动
+	go server.Run(":8081")
+}
+
+func newResource(serviceName, serviceVersion string) (*resource.Resource, error) {
+	return resource.Merge(resource.Default(),
+		resource.NewWithAttributes(semconv.SchemaURL,
+			semconv.ServiceName(serviceName),
+			semconv.ServiceVersion(serviceVersion),
+		))
+}
+
+func newTraceProvider(res *resource.Resource) (*trace.TracerProvider, error) {
+	exporter, err := zipkin.New(
+		"http://localhost:9411/api/v2/spans")
+	if err != nil {
+		return nil, err
+	}
+
+	traceProvider := trace.NewTracerProvider(
+		trace.WithBatcher(exporter,
+			// Default is 5s. Set to 1s for demonstrative purposes.
+			trace.WithBatchTimeout(time.Second)),
+		trace.WithResource(res),
+	)
+	return traceProvider, nil
+}
+
+func newPropagator() propagation.TextMapPropagator {
+	return propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	)
 }

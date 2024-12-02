@@ -13,7 +13,9 @@ import (
 // 在调度的时候，会使用一张表来实现分布式锁
 func NewDefaultService(
 	db *gorm.DB,
-	producer sarama.SyncProducer) (*service.Service, error) {
+	producer sarama.SyncProducer,
+	opts ...service.ShardingServiceOpt,
+	) (*service.Service, error) {
 	dbs := map[string]*gorm.DB{
 		"": db,
 	}
@@ -25,7 +27,7 @@ func NewDefaultService(
 	return &service.Service{
 		ShardingService: NewDefaultShardingService(dbs, producer,
 			glock.NewClient(db),
-			sharding.NewNoShard("local_msgs")),
+			sharding.NewNoShard("local_msgs"),opts...),
 	}, nil
 }
 
@@ -36,3 +38,5 @@ func NewDefaultShardingService(dbs map[string]*gorm.DB,
 	sharding sharding.Sharding,opts ...service.ShardingServiceOpt) *service.ShardingService {
 	return service.NewShardingService(dbs, producer, lockClient, sharding,opts...)
 }
+
+
