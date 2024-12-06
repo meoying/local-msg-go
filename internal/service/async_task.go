@@ -20,7 +20,7 @@ import (
 type AsyncTask struct {
 	waitDuration time.Duration
 	dst          sharding.Dst
-	msgSender			MsgSender
+	executor     Executor
 	db           *gorm.DB
 
 	logger *slog.Logger
@@ -29,6 +29,7 @@ type AsyncTask struct {
 
 	lockClient dlock.Client
 }
+
 // Start 开启补偿任务。当 ctx 过期或者被取消的时候，就会退出
 func (task *AsyncTask) Start(ctx context.Context) {
 	key := fmt.Sprintf("%s.%s", task.dst.DB, task.dst.Table)
@@ -137,15 +138,7 @@ func (task *AsyncTask) loop(ctx context.Context) (int, error) {
 	// 假设是 3s 一个循环，这个参数也可以控制
 	loopCtx, cancel := context.WithTimeout(ctx, time.Second*3)
 	defer cancel()
-	// 因为你每次都会更新时间和状态，所以你可以永远从 0 开始
-	data, err := task.findSuspendMsg(loopCtx, 0, task.batchSize)
-	if err != nil {
-		task.logger.Error("查询数据失败", slog.String("err", err.Error()))
-		return 0, fmt.Errorf("查询数据失败 %w", err)
-	}
-	task.logger.Debug("找到数据", slog.Int("cnt", len(data)))
-	err = task.msgSender.SendMsg(ctx,task.db,data,task.dst.Table)
-	return len(data), err
+	return task.executor.Exec(loopCtx, task.db, task.dst.Table)
 }
 
 func (task *AsyncTask) findSuspendMsg(ctx context.Context,
