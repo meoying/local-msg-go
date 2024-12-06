@@ -10,7 +10,6 @@ import (
 	"github.com/meoying/local-msg-go/internal/lock/errs"
 	"github.com/meoying/local-msg-go/internal/msg"
 	"github.com/meoying/local-msg-go/internal/sharding"
-	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 	"log/slog"
 	"time"
@@ -21,7 +20,7 @@ import (
 type AsyncTask struct {
 	waitDuration time.Duration
 	dst          sharding.Dst
-	svc          *ShardingService
+	msgSender			MsgSender
 	db           *gorm.DB
 
 	logger *slog.Logger
@@ -30,7 +29,6 @@ type AsyncTask struct {
 
 	lockClient dlock.Client
 }
-
 // Start 开启补偿任务。当 ctx 过期或者被取消的时候，就会退出
 func (task *AsyncTask) Start(ctx context.Context) {
 	key := fmt.Sprintf("%s.%s", task.dst.DB, task.dst.Table)
@@ -146,18 +144,7 @@ func (task *AsyncTask) loop(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("查询数据失败 %w", err)
 	}
 	task.logger.Debug("找到数据", slog.Int("cnt", len(data)))
-	var eg errgroup.Group
-	for _, m := range data {
-		shadow := m
-		eg.Go(func() error {
-			err1 := task.svc.sendMsg(loopCtx, task.db, &shadow, task.dst.Table)
-			if err1 != nil {
-				err1 = fmt.Errorf("发送消息失败 %w", err1)
-			}
-			return err1
-		})
-	}
-	err = eg.Wait()
+	err = task.msgSender.SendMsg(ctx,task.db,data,task.dst.Table)
 	return len(data), err
 }
 

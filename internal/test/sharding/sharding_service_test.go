@@ -11,6 +11,7 @@ import (
 	"github.com/meoying/local-msg-go/internal/dao"
 	dlock "github.com/meoying/local-msg-go/internal/lock"
 	glock "github.com/meoying/local-msg-go/internal/lock/gorm"
+	"github.com/meoying/local-msg-go/internal/service"
 	"github.com/meoying/local-msg-go/internal/sharding"
 	"github.com/meoying/local-msg-go/internal/test"
 	"github.com/meoying/local-msg-go/internal/test/mocks"
@@ -260,6 +261,119 @@ func (s *OrderServiceTestSuite) TestAsyncTask() {
 	svc.MaxTimes = 3
 	// 两条一批，减少构造数据
 	svc.BatchSize = 2
+
+	// 五秒钟可以确保所有的数据都处理完，但是 msg5 时间还不到
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	svc.StartAsyncTask(ctx)
+	// 等过期
+	<-ctx.Done()
+
+	// 如果要是到了这里，那么预期中应该所有的数据都要么发送完了，要么已经超过发送次数了
+
+	for _, dst := range s.rules.EffectiveTablesFunc() {
+		newCtx, newCancel := context.WithTimeout(context.Background(), time.Second*3)
+		msgs = []dao.LocalMsg{}
+		db := s.dbs[dst.DB]
+		err := db.WithContext(newCtx).
+			Table(dst.Table).Order("id ASC").Find(&msgs).Error
+		newCancel()
+		assert.NoError(s.T(), err)
+		// 开始断言
+		// id 为 1
+		msg1.Status = dao.MsgStatusSuccess
+		msg1.SendTimes = 1
+		s.AssertMsg(msg1, msgs[0])
+
+		// id = 2 不会变
+		s.AssertMsg(msg2, msgs[1])
+		// id = 3 的不会变
+		s.AssertMsg(msg3, msgs[2])
+		// id = 4 的不会变
+		s.AssertMsg(msg4, msgs[3])
+		// id = 5
+		msg5.Status = dao.MsgStatusSuccess
+		msg5.SendTimes = 3
+		s.AssertMsg(msg5, msgs[4])
+		// id = 6
+		msg6.Status = dao.MsgStatusFail
+		msg6.SendTimes = 3
+		s.AssertMsg(msg6, msgs[5])
+	}
+}
+
+func (s *OrderServiceTestSuite) TestBatchAsyncTask() {
+	// 这里我们的测试逻辑很简单，就是在数据库中直接插入不同数据
+	// 模拟四条，来覆盖不同的场景
+	msgs := make([]dao.LocalMsg, 0, 4)
+	now := time.Now().UnixMilli()
+	// id = 1 的会取出来
+	msg1 := s.MockDAOMsg(1, now-(time.Second*11).Milliseconds())
+	msgs = append(msgs, msg1)
+
+	// id = 2 的不会取出来，因为已经彻底失败了
+	msg2 := s.MockDAOMsg(2, now-(time.Second*11).Milliseconds())
+	msg2.Status = dao.MsgStatusFail
+	msgs = append(msgs, msg2)
+
+	// id = 3 的不会取出来，因为已经成功了
+	msg3 := s.MockDAOMsg(3, now-(time.Second*11).Milliseconds())
+	msg3.Status = dao.MsgStatusSuccess
+	msgs = append(msgs, msg3)
+
+	// id = 4 的不会取出来，因为还没到时间间隔，业务可能还在处理中
+	msg4 := s.MockDAOMsg(4, now-(time.Second*1).Milliseconds())
+	msg4.Status = dao.MsgStatusInit
+	msgs = append(msgs, msg4)
+
+	// id = 5 会取出来，但是它只有最后一次发送机会了，发送会成功
+	msg5 := s.MockDAOMsg(5, now-(time.Second*13).Milliseconds())
+	msg5.Status = dao.MsgStatusInit
+	msg5.SendTimes = 2
+	msgs = append(msgs, msg5)
+
+	// id = 6 会取出来，但是它只有最后一次发送机会了，发送会失败
+	msg6 := s.MockDAOMsg(6, now-(time.Second*13).Milliseconds())
+	msg6.Status = dao.MsgStatusInit
+	msg6.SendTimes = 2
+
+	msgs = append(msgs, msg6)
+	// 所有的数据库，所有的表都执行一遍
+	for _, dst := range s.rules.EffectiveTablesFunc() {
+		db := s.dbs[dst.DB]
+		err := db.Table(dst.Table).Create(&msgs).Error
+		require.NoError(s.T(), err)
+	}
+
+	ctrl := gomock.NewController(s.T())
+	defer ctrl.Finish()
+	producer := mocks.NewMockSyncProducer(ctrl)
+	producer.EXPECT().SendMessages(gomock.Any()).DoAndReturn(func(msgs []*sarama.ProducerMessage) error {
+		var perrs sarama.ProducerErrors
+		for _,pmsg := range msgs {
+			data := []byte(pmsg.Key.(sarama.StringEncoder))
+			if !bytes.Contains(data, []byte("success")) {
+				perrs = append(perrs,&sarama.ProducerError{
+					Msg: pmsg,
+					Err: errors.New("mock error"),
+				})
+			}
+		}
+		if len(perrs) > 0 {
+			return perrs
+		}
+		return nil
+	}).AnyTimes()
+
+	svc := lmsg.NewDefaultShardingService(s.dbs,
+		producer,
+		s.lockClient,
+		s.rules,
+		service.WithBatchSender())
+	svc.WaitDuration = time.Second * 10
+	svc.MaxTimes = 3
+	// 两条一批，减少构造数据
+	svc.BatchSize = 3
 
 	// 五秒钟可以确保所有的数据都处理完，但是 msg5 时间还不到
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
