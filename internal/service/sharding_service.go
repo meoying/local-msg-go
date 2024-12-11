@@ -12,6 +12,8 @@ import (
 	"github.com/meoying/local-msg-go/internal/sharding"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 	"log/slog"
 	"strings"
@@ -39,6 +41,7 @@ type ShardingService struct {
 	LockClient dlock.Client
 
 	Logger *slog.Logger
+	tracer trace.Tracer
 }
 
 func NewShardingService(
@@ -55,6 +58,7 @@ func NewShardingService(
 		BatchSize:    10,
 		Logger:       slog.Default(),
 		LockClient:   lockClient,
+		tracer:       otel.Tracer("localmsg"),
 	}
 	// 默认为并发发送
 	svc.executor = NewCurMsgExecutor(svc)
@@ -112,27 +116,27 @@ func (svc *ShardingService) execTx(ctx context.Context,
 	biz func(tx *gorm.DB) (msg.Msg, error),
 	table string,
 ) error {
-	tracer := otel.Tracer("LocalMsg_ExecTx")
-	ctx, businessSpan := tracer.Start(ctx, "localMsg-span")
+	ctx, businessSpan := svc.tracer.Start(ctx, "localMsg-span")
 	defer businessSpan.End() // 假设 BizLogic 是进行业务逻辑执行的函数
-	ctx, bizSpan := tracer.Start(ctx, "biz-span")
 	var dmsg *dao.LocalMsg
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		_, bizSpan := svc.tracer.Start(ctx, "biz-transaction")
+		defer bizSpan.End()
 		m, err := biz(tx)
 		dmsg = svc.newDmsg(m)
+		// 通过 key 可以将业务和这里可观测性数据关联在一起
+		bizSpan.SetAttributes(attribute.String("key", dmsg.Key))
 		if err != nil {
 			return err
 		}
 		return tx.Table(table).Create(dmsg).Error
 	})
-	bizSpan.End()
+
 	if err == nil {
-		ctx, sendSpan := tracer.Start(ctx, "sendToKafka-span")
 		err1 := svc.sendMsg(ctx, db, dmsg, table)
 		if err1 != nil {
 			slog.Error("发送消息出现问题", slog.Any("error", err1))
 		}
-		sendSpan.End()
 	}
 	return err
 }
@@ -151,6 +155,9 @@ func (svc *ShardingService) ExecTx(ctx context.Context,
 
 func (svc *ShardingService) sendMsg(ctx context.Context,
 	db *gorm.DB, dmsg *dao.LocalMsg, table string) error {
+	ctx, sendSpan := svc.tracer.Start(ctx, "localmsg-sending")
+	defer sendSpan.End()
+	sendSpan.SetAttributes(attribute.String("key", dmsg.Key))
 	var msg msg.Msg
 	err := json.Unmarshal(dmsg.Data, &msg)
 	if err != nil {
@@ -239,13 +246,15 @@ func (svc *ShardingService) sendMsgs(ctx context.Context,
 		successMsgs = dmsgs
 	}
 	if len(successMsgs) > 0 {
-
 		err = svc.updateMsgs(ctx, db, successMsgs, successFields, topic, table)
 		if err != nil {
 			return err
 		}
 	}
 	if len(failMsgs) > 0 {
+
+		// TODO 用一个独立的 counter 来记录出现了补偿任务补发最终失败的情况
+
 		svc.Logger.Error("发送消息失败",
 			slog.String("topic", topic),
 			slog.String("keys", svc.getKeyStr(successMsgs)),
