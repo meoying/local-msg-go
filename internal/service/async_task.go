@@ -84,6 +84,7 @@ func (task *AsyncTask) Start(ctx context.Context) {
 	// 开启
 }
 
+// TODO refreshAndLoop 每一个循环里面开一个 span
 func (task *AsyncTask) refreshAndLoop(ctx context.Context, lock dlock.Lock) {
 	// 这里有两个动作：
 	// 1. 执行异步补偿任务，
