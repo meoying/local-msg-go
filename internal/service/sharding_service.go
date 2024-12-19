@@ -182,10 +182,11 @@ func (svc *ShardingService) sendMsg(ctx context.Context,
 			slog.Int("send_times", times),
 		)
 		if times >= svc.MaxTimes {
+			count = 1
 			fields["status"] = dao.MsgStatusFail
 		}
 	} else {
-		count = 1
+
 		fields["status"] = dao.MsgStatusSuccess
 	}
 
