@@ -20,6 +20,8 @@ import (
 	"time"
 )
 
+var ErrMsgFinalFail = errors.New("消息最终发送失败")
+
 // ShardingService 支持分库分表操作的
 type ShardingService struct {
 	// 分库之后的连接信息
@@ -102,7 +104,8 @@ func (svc *ShardingService) StartAsyncTask(ctx context.Context) {
 // SendMsg 发送消息
 func (svc *ShardingService) SendMsg(ctx context.Context, db, table string, msg msg.Msg) error {
 	dmsg := svc.newDmsg(msg)
-	return svc.sendMsg(ctx, svc.DBs[db], dmsg, table)
+	_, err := svc.sendMsg(ctx, svc.DBs[db], dmsg, table)
+	return err
 }
 
 // SaveMsg 手动保存接口, tx 必须是你的本地事务
@@ -133,7 +136,7 @@ func (svc *ShardingService) execTx(ctx context.Context,
 	})
 
 	if err == nil {
-		err1 := svc.sendMsg(ctx, db, dmsg, table)
+		_, err1 := svc.sendMsg(ctx, db, dmsg, table)
 		if err1 != nil {
 			slog.Error("发送消息出现问题", slog.Any("error", err1))
 		}
@@ -154,14 +157,15 @@ func (svc *ShardingService) ExecTx(ctx context.Context,
 }
 
 func (svc *ShardingService) sendMsg(ctx context.Context,
-	db *gorm.DB, dmsg *dao.LocalMsg, table string) error {
+	db *gorm.DB, dmsg *dao.LocalMsg, table string) (int, error) {
 	ctx, sendSpan := svc.tracer.Start(ctx, "localmsg-sending")
 	defer sendSpan.End()
 	sendSpan.SetAttributes(attribute.String("key", dmsg.Key))
 	var msg msg.Msg
+	var count int
 	err := json.Unmarshal(dmsg.Data, &msg)
 	if err != nil {
-		return fmt.Errorf("提取消息内容失败 %w", err)
+		return 0, fmt.Errorf("提取消息内容失败 %w", err)
 	}
 	// 发送消息
 	_, _, err = svc.Producer.SendMessage(newSaramaProducerMsg(msg))
@@ -178,9 +182,11 @@ func (svc *ShardingService) sendMsg(ctx context.Context,
 			slog.Int("send_times", times),
 		)
 		if times >= svc.MaxTimes {
+			count = 1
 			fields["status"] = dao.MsgStatusFail
 		}
 	} else {
+
 		fields["status"] = dao.MsgStatusSuccess
 	}
 
@@ -188,14 +194,18 @@ func (svc *ShardingService) sendMsg(ctx context.Context,
 		Where("id=?", dmsg.Id).
 		Updates(fields).Error
 	if err1 != nil {
-		return fmt.Errorf("发送消息但是更新消息失败 %w, 发送结果 %w, topic %s, key %s",
+		return 0, fmt.Errorf("发送消息但是更新消息失败 %w, 发送结果 %w, topic %s, key %s",
 			err1, err, msg.Topic, msg.Key)
 	}
-	return err
+
+	return count, err
 }
 
 func (svc *ShardingService) sendMsgs(ctx context.Context,
-	db *gorm.DB, dmsgs []*dao.LocalMsg, table string) error {
+	db *gorm.DB, dmsgs []*dao.LocalMsg, table string) (int64, error) {
+	ctx, sendSpan := svc.tracer.Start(ctx, "localmsg-sending")
+	defer sendSpan.End()
+	sendSpan.SetAttributes(attribute.String("keys", svc.getKeyStr(dmsgs)))
 	msgs := make([]msg.Msg, 0, len(dmsgs))
 	// 这个方法的前提是发送到同一个topic
 	var topic string
@@ -203,7 +213,7 @@ func (svc *ShardingService) sendMsgs(ctx context.Context,
 		var msg msg.Msg
 		err := json.Unmarshal(dmsg.Data, &msg)
 		if err != nil {
-			return fmt.Errorf("提取消息内容失败 %w", err)
+			return 0, fmt.Errorf("提取消息内容失败 %w", err)
 		}
 		topic = msg.Topic
 		msgs = append(msgs, msg)
@@ -237,7 +247,7 @@ func (svc *ShardingService) sendMsgs(ctx context.Context,
 			var perr error
 			failMsgs, initMsgs, successMsgs, perr = svc.getPartitionMsgs(dmsgs, errs)
 			if perr != nil {
-				return perr
+				return 0, perr
 			}
 		} else {
 			failMsgs, initMsgs = svc.getFailMsgs(dmsgs)
@@ -246,22 +256,19 @@ func (svc *ShardingService) sendMsgs(ctx context.Context,
 		successMsgs = dmsgs
 	}
 	if len(successMsgs) > 0 {
-		err = svc.updateMsgs(ctx, db, successMsgs, successFields, topic, table)
-		if err != nil {
-			return err
+		uerr := svc.updateMsgs(ctx, db, successMsgs, successFields, topic, table)
+		if uerr != nil {
+			return 0, uerr
 		}
 	}
 	if len(failMsgs) > 0 {
-
-		// TODO 用一个独立的 counter 来记录出现了补偿任务补发最终失败的情况
-
 		svc.Logger.Error("发送消息失败",
 			slog.String("topic", topic),
 			slog.String("keys", svc.getKeyStr(successMsgs)),
 		)
-		err = svc.updateMsgs(ctx, db, failMsgs, failFields, topic, table)
-		if err != nil {
-			return err
+		uerr := svc.updateMsgs(ctx, db, failMsgs, failFields, topic, table)
+		if uerr != nil {
+			return 0, uerr
 		}
 	}
 	if len(initMsgs) > 0 {
@@ -269,12 +276,12 @@ func (svc *ShardingService) sendMsgs(ctx context.Context,
 			slog.String("topic", topic),
 			slog.String("keys", svc.getKeyStr(successMsgs)),
 		)
-		err = svc.updateMsgs(ctx, db, initMsgs, initFields, topic, table)
-		if err != nil {
-			return err
+		uerr := svc.updateMsgs(ctx, db, initMsgs, initFields, topic, table)
+		if uerr != nil {
+			return int64(len(failMsgs)), uerr
 		}
 	}
-	return nil
+	return int64(len(failMsgs)), err
 }
 
 // 部分失败获取消息

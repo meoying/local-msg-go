@@ -2,16 +2,18 @@ package service
 
 import (
 	"context"
+	"strconv"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"gorm.io/gorm"
-	"strconv"
-	"time"
 )
 
 type MetricExecutor struct {
 	executor         Executor
 	TaskExecDuration *prometheus.HistogramVec
+	RetryFailCounter *prometheus.CounterVec
 }
 
 func NewMetricExecutor(executor Executor) *MetricExecutor {
@@ -25,13 +27,24 @@ func NewMetricExecutor(executor Executor) *MetricExecutor {
 			},
 			[]string{"table", "success"}, // 标签:表名
 		),
+		RetryFailCounter: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "compensation_task_retry_failures_total",
+				Help: "补偿任务重试多次后仍然失败的总次数",
+			},
+			[]string{"table"}, // 标签: 表名
+		),
 	}
 }
 
-func (m *MetricExecutor) Exec(ctx context.Context, db *gorm.DB, table string) (int, error) {
+func (m *MetricExecutor) Exec(ctx context.Context, db *gorm.DB, table string) (int, int, error) {
 	start := time.Now()
-	cnt, err := m.executor.Exec(ctx, db, table)
+	cnt, errCount, err := m.executor.Exec(ctx, db, table)
+	// 记录最终失败的次数
+	if err != nil && errCount> 0 {
+		m.RetryFailCounter.WithLabelValues(table).Add(float64(errCount))
+	}
 	// 记录执行时间
 	m.TaskExecDuration.WithLabelValues(table, strconv.FormatBool(err == nil)).Observe(time.Since(start).Seconds())
-	return cnt, err
+	return cnt,errCount, err
 }

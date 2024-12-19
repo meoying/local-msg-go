@@ -10,6 +10,8 @@ import (
 	"github.com/meoying/local-msg-go/internal/lock/errs"
 	"github.com/meoying/local-msg-go/internal/msg"
 	"github.com/meoying/local-msg-go/internal/sharding"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"gorm.io/gorm"
 	"log/slog"
 	"time"
@@ -86,6 +88,7 @@ func (task *AsyncTask) Start(ctx context.Context) {
 
 // TODO refreshAndLoop 每一个循环里面开一个 span
 func (task *AsyncTask) refreshAndLoop(ctx context.Context, lock dlock.Lock) {
+	tracer := otel.Tracer("async-task")
 	// 这里有两个动作：
 	// 1. 执行异步补偿任务，
 	// 2. 判定要不要让出分布式锁，这里采用一种比较简单的策略，
@@ -94,44 +97,70 @@ func (task *AsyncTask) refreshAndLoop(ctx context.Context, lock dlock.Lock) {
 	// 连续出现 error 的次数，用于容错、负载均衡
 	errCnt := 0
 	for {
+		// 为每个循环创建一个新的 span
+		spanCtx, span := tracer.Start(ctx, fmt.Sprintf("refresh-and-loop-%s-%s",
+			task.dst.DB, task.dst.Table))
+
+		// 设置基础属性
+		span.SetAttributes(
+			attribute.String("db", task.dst.DB),
+			attribute.String("table", task.dst.Table),
+			attribute.Int("error_count", errCnt),
+		)
+
 		// 刷新的过期时间应该很短
-		refreshCtx, cancel := context.WithTimeout(ctx, time.Second*3)
+		refreshCtx, cancel := context.WithTimeout(spanCtx, time.Second*3)
 		// 手动控制每一批次循环开始就续约分布式锁
 		// 而后控制每一批次的超时时间，
 		// 这样就可以确保不会出现分布式锁过期，但是任务还在运行的情况
 		err := lock.Refresh(refreshCtx)
 		cancel()
 		if err != nil {
-			slog.Error("分布式锁续约失败，直接返回")
+			span.SetAttributes(attribute.String("error", "refresh_lock_failed"))
+			span.RecordError(err)
+			task.logger.Error("分布式锁续约失败，直接返回")
+			span.End()
 			return
 		}
 
-		cnt, err := task.loop(ctx)
+		cnt, err := task.loop(spanCtx)
 		ctxErr := ctx.Err()
 		switch {
 		case errors.Is(ctxErr, context.Canceled), errors.Is(ctxErr, context.DeadlineExceeded):
 			// 这个是最上层用户取消，一般就是关闭服务的时候会触发
+			span.SetAttributes(attribute.String("exit_reason", "context_cancelled"))
+			span.End()
 			return
 		case err != nil:
 			// 说明执行出错了，这个时候我们认为可能是偶发性失败，
 			// 也可能是系统高负载引起不可用
 			// 也可能是彻底不可用，我们通过连续 N 次循环都出错来判定是偶发还是非偶发
+			span.RecordError(err)
+			span.SetAttributes(attribute.String("error", "loop_execution_failed"))
 			errCnt++
 			// 连续 5 次，基本上可以断定不是偶发性错误了
 			// 连续次数越多，越容易避开偶发性错误
 			const threshold = 5
 			if errCnt >= threshold {
+				span.SetAttributes(
+					attribute.String("exit_reason", "error_threshold_exceeded"),
+					attribute.Int("threshold", threshold),
+				)
 				task.logger.Error("执行任务连续出错，退出循环", slog.Int("threshold", threshold))
+				span.End()
 				return
 			}
 		default:
 			// 重置
 			errCnt = 0
-			// 一条都没有取到。那就说明没数据了，稍微等一下
 			if cnt == 0 {
+				span.SetAttributes(attribute.String("status", "no_messages"))
 				time.Sleep(time.Second)
+			} else {
+				span.SetAttributes(attribute.String("status", "success"))
 			}
 		}
+		span.End()
 	}
 }
 
@@ -139,7 +168,8 @@ func (task *AsyncTask) loop(ctx context.Context) (int, error) {
 	// 假设是 3s 一个循环，这个参数也可以控制
 	loopCtx, cancel := context.WithTimeout(ctx, time.Second*3)
 	defer cancel()
-	return task.executor.Exec(loopCtx, task.db, task.dst.Table)
+	count, _, err := task.executor.Exec(loopCtx, task.db, task.dst.Table)
+	return count, err
 }
 
 func (task *AsyncTask) findSuspendMsg(ctx context.Context,
