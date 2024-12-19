@@ -74,7 +74,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		// 启动补偿任务
-		//msgSvc.StartAsyncTask(ctx)
+		msgSvc.StartAsyncTask(ctx)
 		println(ctx == nil)
 	}()
 
